@@ -13,3 +13,8 @@ pip install requirements.txt
 # start up server
 uvicorn main:app
 ```
+
+User of authentication:
+
+email: admin@admin.com
+password: admin
