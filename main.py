@@ -7,6 +7,10 @@ from typing import Optional, List
 from starlette.requests import Request
 from jwt_manager import create_token, valid_token
 from fastapi.security import HTTPBearer
+from fastapi.encoders import jsonable_encoder
+
+from config.database import Session, engine, Base
+from models.movie import Movie as MovieModel
 
 # APP
 
@@ -16,6 +20,8 @@ app = FastAPI()
 app.title = "My app with FastAPI"
 # set version
 app.version = "0.0.1"
+
+Base.metadata.create_all(bind = engine)
 
 # DATA
 
@@ -115,30 +121,50 @@ def login(user: User):
 # get /movies => return JSONResponse
 @app.get('/movies', tags = ['movies'], response_model = List[Movie], status_code = 200, dependencies = [Depends(JWTBearer())])
 def getMovies() -> List[Movie]:
-    return JSONResponse(status_code = 200, content = movies)
+    # init db session
+    db = Session()
+    # search data
+    data = db.query(MovieModel).all()
+    return JSONResponse(status_code = 200, content = jsonable_encoder(data))
 
 # get /movies/{id} to search a movie by id, and valid param with path
 @app.get('/movies/{id}', tags = ['movies'], response_model = Movie)
 def getMovie(id: int = Path(ge = 1, le = 2000)) -> Movie:
-    movie = list(filter(lambda item: item['id'] == id, movies))
-    if movie:
-        return JSONResponse(content = movie[0])
-    else:
-        return JSONResponse(status_code = 404, content = [])
+    # init db session
+    db = Session()
+    # filter by id and get first result
+    data = db.query(MovieModel).filter(MovieModel.id == id).first()
+    if not data:
+        return JSONResponse(status_code = 404, content = {'message': "Record not fund"})
+
+    # in another case, retur data
+    return JSONResponse(status_code = 200, content = jsonable_encoder(data))
     
 # get /movies => query route, the params have a condition with Query
 @app.get('/movies/', tags = ['movies'], response_model = List[Movie])
 def getMoviesByCategory(category: str = Query(min_length = 5, max_length = 15), year: str = Query(min_length = 4)) -> List[Movie]:
-    # filter movies by category or year
-    result = list(filter(lambda item: category in item['category'] or year in item['year'], movies))
-    if result:
-        return JSONResponse(content = result)
+    # init db session
+    db = Session()
+    # filter data by category or year
+    data = db.query(MovieModel).filter(category.lower() in str(MovieModel.category).lower() or MovieModel.year == year).all()
+    # if data, then return data, else return empty list
+    if data:
+        return JSONResponse(status_code = 200, content = jsonable_encoder(data))
     else:
         return JSONResponse(status_code = 404, content = [])
     
 # post /movies => to create a new movie
 @app.post('/movies', tags = ['movies'], response_model = dict, status_code = 201)
 def createMovie(movie: Movie) -> dict:
+    # init db session
+    db = Session()
+    # create movie model with form data
+    new_movie = MovieModel(**movie.dict())
+    # save on database
+    db.add(new_movie)
+    # commit changes
+    db.commit()
+    # save on memory
     movies.append(movie)
     return JSONResponse(status_code = 201, content = {
         "message": "Movie saved succesfully"
@@ -147,17 +173,23 @@ def createMovie(movie: Movie) -> dict:
 # put /movies => to update a movie
 @app.put('/movies/{id}', tags = ['movies'], response_model = dict, status_code = 200)
 def updateMovie(id: int, movie: Movie) -> dict:
-    # loop movies
-    for item in movies:
-        # if movie was fund by id
-        if item['id'] == id:
-            item['title'] = movie.title
-            item['overview'] = movie.overview
-            item['year'] = movie.year
-            item['rating'] = movie.rating
-            item['category'] = movie.category
-            break
-
+    # init db session
+    db = Session()
+    # load record
+    data = db.query(MovieModel).filter(MovieModel.id == id).first()
+    # if not data was fund
+    if not data:
+        return JSONResponse(status_code = 404, content = {'message': "Record not fund"})
+    
+    # set attributes
+    data.title = movie.title
+    data.overview = movie.overview
+    data.year = movie.year
+    data.rating = movie.rating
+    data.category = movie.category
+    # commit changes
+    db.commit()
+    
     return JSONResponse(status_code = 200, content = {
         "message": "Movie udpated succesfully"
     })
@@ -165,12 +197,19 @@ def updateMovie(id: int, movie: Movie) -> dict:
 # delete /movies => to delete a movie
 @app.delete('/movies/{id}', tags = ['movies'], response_model = dict, status_code = 200)
 def deleteMovie(id: int) -> dict:
-    # loop movies
-    for movie in movies:
-        # if movie was fund by id
-        if movie['id'] == id:
-            movies.remove(movie)
-            break
+    # init db session
+    db = Session()
+
+    # search record
+    data = db.query(MovieModel).filter(MovieModel.id == id).first()
+    # if record was not fund
+    if not data:
+        return JSONResponse(status_code = 404, content = {'message': "Record not fund"})
+    
+    # remove record
+    db.delete(data)
+    # commit changes
+    db.commit()
 
     return JSONResponse(status_code = 200, content = {
         "message": "Movie deleted succesfully"
