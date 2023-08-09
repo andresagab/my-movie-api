@@ -1,11 +1,13 @@
 from fastapi import APIRouter, Path, Query, Depends
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List
+from schemas.movie import Movie
 
 from config.database import Session
 from models.movie import Movie as MovieModel
+
+from services.movie import MovieService
 
 # middleware
 from middlewares.jwt_bearer import JWTBearer
@@ -13,34 +15,13 @@ from middlewares.jwt_bearer import JWTBearer
 # create router app
 movieRouter = APIRouter()
 
-# define schema of movie
-class Movie(BaseModel):
-    id: Optional[int] = None
-    title: str = Field(min_length = 5, max_length = 15)
-    overview: str = Field(min_length = 15, max_length = 50)
-    year: str= Field(min_length = 4, max_length = 4)
-    rating: float = Field(ge = 1, le = 10)
-    category: str = Field(min_length = 5, max_length = 15)
-
-    class Config:
-        schema_extra = {
-            "example": {
-                "id": 1,
-                "title": "My movie",
-                "overview": "Description movie",
-                "year": "2023",
-                "rating": 8.5,
-                "category": "Category movie",
-            }
-        }
-
 # get /movies => return JSONResponse
 @movieRouter.get('/movies', tags = ['movies'], response_model = List[Movie], status_code = 200, dependencies = [Depends(JWTBearer())])
 def getMovies() -> List[Movie]:
     # init db session
     db = Session()
-    # search data
-    data = db.query(MovieModel).all()
+    # search data with service
+    data = MovieService(db).getMovies()
     return JSONResponse(status_code = 200, content = jsonable_encoder(data))
 
 # get /movies/{id} to search a movie by id, and valid param with path
@@ -48,8 +29,8 @@ def getMovies() -> List[Movie]:
 def getMovie(id: int = Path(ge = 1, le = 2000)) -> Movie:
     # init db session
     db = Session()
-    # filter by id and get first result
-    data = db.query(MovieModel).filter(MovieModel.id == id).first()
+    # get record with service
+    data = MovieService(db).getMovie(id)
     if not data:
         return JSONResponse(status_code = 404, content = {'message': "Record not fund"})
 
@@ -58,11 +39,11 @@ def getMovie(id: int = Path(ge = 1, le = 2000)) -> Movie:
     
 # get /movies => query route, the params have a condition with Query
 @movieRouter.get('/movies/', tags = ['movies'], response_model = List[Movie])
-def getMoviesByCategory(category: str = Query(min_length = 5, max_length = 15), year: str = Query(min_length = 4)) -> List[Movie]:
+def getMoviesByCategory(category: str = Query(min_length = 5, max_length = 15)) -> List[Movie]:
     # init db session
     db = Session()
-    # filter data by category or year
-    data = db.query(MovieModel).filter(category.lower() in str(MovieModel.category).lower() or MovieModel.year == year).all()
+    # get movies by category using service
+    data = MovieService(db).getMovieByCategory(category)
     # if data, then return data, else return empty list
     if data:
         return JSONResponse(status_code = 200, content = jsonable_encoder(data))
@@ -74,12 +55,8 @@ def getMoviesByCategory(category: str = Query(min_length = 5, max_length = 15), 
 def createMovie(movie: Movie) -> dict:
     # init db session
     db = Session()
-    # create movie model with form data
-    new_movie = MovieModel(**movie.dict())
-    # save on database
-    db.add(new_movie)
-    # commit changes
-    db.commit()
+    # create movie model with form data and service
+    MovieService(db).createMovie(movie)
     return JSONResponse(status_code = 201, content = {
         "message": "Movie saved succesfully"
     })
@@ -89,18 +66,14 @@ def createMovie(movie: Movie) -> dict:
 def updateMovie(id: int, movie: Movie) -> dict:
     # init db session
     db = Session()
-    # load record
-    data = db.query(MovieModel).filter(MovieModel.id == id).first()
+    # load movie from db
+    data = MovieService(db).getMovie(id)
     # if not data was fund
     if not data:
         return JSONResponse(status_code = 404, content = {'message': "Record not fund"})
     
-    # set attributes
-    data.title = movie.title
-    data.overview = movie.overview
-    data.year = movie.year
-    data.rating = movie.rating
-    data.category = movie.category
+    # update movie
+    MovieService(db).updateMovie(id, movie)
     # commit changes
     db.commit()
     
@@ -115,7 +88,7 @@ def deleteMovie(id: int) -> dict:
     db = Session()
 
     # search record
-    data = db.query(MovieModel).filter(MovieModel.id == id).first()
+    data = MovieService(db).getMovie(id)
     # if record was not fund
     if not data:
         return JSONResponse(status_code = 404, content = {'message': "Record not fund"})
